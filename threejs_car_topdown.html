@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Low Poly City - Top Down View</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; background: #1a1a2e; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #fff; }
+        canvas { display: block; }
+
+        #loading {
+            position: fixed; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; background: #1a1a2e;
+            z-index: 100; transition: opacity 0.6s ease;
+        }
+        #loading.hidden { opacity: 0; pointer-events: none; }
+        #loading h1 { font-size: 1.5rem; font-weight: 400; letter-spacing: 0.05em; margin-bottom: 1.5rem; color: #a0a0c0; }
+        .loader-bar-track { width: 240px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; }
+        .loader-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #6366f1, #a855f7); border-radius: 4px; transition: width 0.3s ease; }
+        #loading .progress-text { margin-top: 0.75rem; font-size: 0.85rem; color: rgba(255,255,255,0.4); font-variant-numeric: tabular-nums; }
+
+        #hud {
+            position: fixed; top: 0; left: 0; right: 0; padding: 16px 24px;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            pointer-events: none; z-index: 10;
+        }
+        #hud > * { pointer-events: auto; }
+        .hud-title {
+            font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+            letter-spacing: 0.12em; color: rgba(255,255,255,0.5);
+            background: rgba(0,0,0,0.4); backdrop-filter: blur(8px);
+            padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+        }
+        .hud-controls-hint {
+            font-size: 0.7rem; color: rgba(255,255,255,0.3); background: rgba(0,0,0,0.3);
+            backdrop-filter: blur(8px); padding: 6px 12px; border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.04); line-height: 1.6;
+        }
+        .hud-controls-hint kbd {
+            display: inline-block; padding: 1px 5px; background: rgba(255,255,255,0.08);
+            border-radius: 3px; font-family: inherit; font-size: 0.65rem;
+        }
+
+        #resetView {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            z-index: 10; pointer-events: auto; background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.7); padding: 8px 18px; border-radius: 8px;
+            font-size: 0.75rem; font-family: inherit; cursor: pointer;
+            transition: all 0.2s ease; opacity: 0;
+        }
+        #resetView.show { opacity: 1; }
+        #resetView:hover { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.15); }
+
+        #stats {
+            position: fixed; bottom: 24px; right: 24px; z-index: 10;
+            font-size: 0.65rem; color: rgba(255,255,255,0.25);
+            font-variant-numeric: tabular-nums; pointer-events: none;
+        }
+
+        /* Car move panel */
+        #carPanel {
+            position: fixed; top: 70px; right: 24px; z-index: 20;
+            background: rgba(10, 10, 30, 0.85); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+            padding: 16px 18px; width: 230px;
+            display: none; flex-direction: column; gap: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        #carPanel.visible { display: flex; }
+
+        .panel-title {
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.1em; color: rgba(255,255,255,0.45);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            padding-bottom: 8px; margin-bottom: 2px;
+        }
+
+        .car-name {
+            font-size: 0.85rem; color: #a78bfa; font-weight: 500;
+        }
+
+        .field-row { display: flex; flex-direction: column; gap: 4px; }
+        .field-label {
+            font-size: 0.65rem; color: rgba(255,255,255,0.3);
+            text-transform: uppercase; letter-spacing: 0.08em;
+        }
+        .field-input-row { display: flex; gap: 6px; align-items: center; }
+        .axis-label {
+            font-size: 0.65rem; color: rgba(255,255,255,0.25);
+            width: 12px; text-align: center; flex-shrink: 0;
+        }
+        input[type="number"] {
+            flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 6px; color: #e2e8f0; font-size: 0.78rem; font-family: 'Segoe UI', sans-serif;
+            padding: 5px 8px; outline: none; transition: border-color 0.2s;
+            -moz-appearance: textfield;
+        }
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+        input[type="number"]:focus { border-color: rgba(99,102,241,0.6); background: rgba(99,102,241,0.08); }
+
+        .btn-row { display: flex; gap: 8px; margin-top: 2px; }
+        .btn {
+            flex: 1; padding: 7px 0; border-radius: 7px; font-size: 0.72rem;
+            font-family: inherit; cursor: pointer; border: none;
+            transition: all 0.18s ease; font-weight: 500;
+        }
+        .btn-apply {
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            color: #fff;
+        }
+        .btn-apply:hover { opacity: 0.88; transform: translateY(-1px); }
+        .btn-reset-car {
+            background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .btn-reset-car:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+        .mode-hint {
+            font-size: 0.65rem; color: rgba(255,255,255,0.2);
+            line-height: 1.5; text-align: center;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            padding-top: 8px; margin-top: 2px;
+        }
+        .mode-hint span { color: rgba(99,102,241,0.7); }
+
+        /* Click-to-place mode indicator */
+        #placeMode {
+            position: fixed; bottom: 66px; left: 50%; transform: translateX(-50%);
+            z-index: 20; background: rgba(99,102,241,0.15); backdrop-filter: blur(8px);
+            border: 1px solid rgba(99,102,241,0.3); border-radius: 8px;
+            padding: 7px 16px; font-size: 0.72rem; color: rgba(168,139,250,0.9);
+            pointer-events: none; opacity: 0; transition: opacity 0.25s ease;
+            white-space: nowrap;
+        }
+        #placeMode.active { opacity: 1; }
+
+        /* Selected car highlight tooltip */
+        #selectionBadge {
+            position: fixed; top: 70px; left: 24px; z-index: 20;
+            background: rgba(99,102,241,0.15); backdrop-filter: blur(8px);
+            border: 1px solid rgba(99,102,241,0.25); border-radius: 8px;
+            padding: 6px 12px; font-size: 0.7rem; color: rgba(168,139,250,0.8);
+            opacity: 0; transition: opacity 0.2s ease; pointer-events: none;
+        }
+        #selectionBadge.show { opacity: 1; }
+    </style>
+</head>
+<body>
+
+<div id="loading">
+    <h1>🌆 Loading City</h1>
+    <div class="loader-bar-track">
+        <div class="loader-bar-fill" id="loaderFill"></div>
+    </div>
+    <div class="progress-text" id="progressText">0%</div>
+</div>
+
+<div id="hud">
+    <div class="hud-title">Low Poly City</div>
+    <div class="hud-controls-hint">
+        <kbd>Drag</kbd> rotate &nbsp;·&nbsp; <kbd>Scroll</kbd> zoom &nbsp;·&nbsp;
+        <kbd>Right-drag</kbd> pan &nbsp;·&nbsp; <kbd>Click car</kbd> select
+    </div>
+</div>
+
+<!-- Car position panel -->
+<div id="carPanel">
+    <div class="panel-title">Move Car</div>
+    <div class="car-name" id="panelCarName">Pickup.003</div>
+
+    <div class="field-row">
+        <div class="field-label">Position</div>
+        <div class="field-input-row">
+            <span class="axis-label" style="color:#f87171">X</span>
+            <input type="number" id="inputX" step="0.5" placeholder="0">
+        </div>
+        <div class="field-input-row">
+            <span class="axis-label" style="color:#4ade80">Y</span>
+            <input type="number" id="inputY" step="0.1" placeholder="0">
+        </div>
+        <div class="field-input-row">
+            <span class="axis-label" style="color:#60a5fa">Z</span>
+            <input type="number" id="inputZ" step="0.5" placeholder="0">
+        </div>
+    </div>
+
+    <div class="field-row">
+        <div class="field-label">Rotation Y (°)</div>
+        <div class="field-input-row">
+            <input type="number" id="inputRot" step="15" placeholder="0" style="flex:1">
+        </div>
+    </div>
+
+    <div class="btn-row">
+        <button class="btn btn-apply" id="btnApply">Apply</button>
+        <button class="btn btn-reset-car" id="btnResetCar">Reset</button>
+    </div>
+
+    <div class="mode-hint">
+        Or <span>click any point</span> on the scene<br>to place the car there
+    </div>
+</div>
+
+<div id="placeMode">📍 Click on the scene to place Pickup.003</div>
+<div id="selectionBadge" id="selectionBadge">✓ Pickup.003 selected</div>
+
+<button id="resetView">↻ Reset View</button>
+<div id="stats"></div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// --- Setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 5000);
+camera.position.set(0, 80, 0.01);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.prepend(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 5;
+controls.maxDistance = 300;
+controls.maxPolarAngle = Math.PI / 2.2;
+controls.update();
+
+// --- Lighting ---
+scene.add(new THREE.AmbientLight(0x8888bb, 0.5));
+scene.add(new THREE.HemisphereLight(0x8888ff, 0x443322, 0.6));
+
+const sun = new THREE.DirectionalLight(0xffeedd, 2.5);
+sun.position.set(50, 100, 40);
+sun.castShadow = true;
+sun.shadow.mapSize.width = 2048;
+sun.shadow.mapSize.height = 2048;
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x8888ff, 0.6);
+fill.position.set(-30, 40, -20);
+scene.add(fill);
+
+// --- Ground ---
+const groundGeo = new THREE.PlaneGeometry(200, 200);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x222244, transparent: true, opacity: 0.3, roughness: 0.8, side: THREE.DoubleSide });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.1;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// invisible ground for raycasting click-to-place
+const groundPickGeo = new THREE.PlaneGeometry(2000, 2000);
+const groundPickMat = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide });
+const groundPick = new THREE.Mesh(groundPickGeo, groundPickMat);
+groundPick.rotation.x = -Math.PI / 2;
+groundPick.position.y = 0;
+scene.add(groundPick);
+
+const grid = new THREE.GridHelper(200, 40, 0x4444aa, 0x333366);
+grid.position.y = -0.05;
+grid.material.transparent = true;
+grid.material.opacity = 0.3;
+scene.add(grid);
+
+// --- Selection highlight ---
+let selectionBox = null;
+function createSelectionBox(obj) {
+    if (selectionBox) scene.remove(selectionBox);
+    const box3 = new THREE.Box3().setFromObject(obj);
+    const size = box3.getSize(new THREE.Vector3());
+    const center = box3.getCenter(new THREE.Vector3());
+    const geo = new THREE.BoxGeometry(size.x * 1.1, size.z * 1.1, size.y * 1.1);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x818cf8, wireframe: true, transparent: true, opacity: 0.55 });
+    selectionBox = new THREE.Mesh(geo, mat);
+    selectionBox.position.copy(center);
+    scene.add(selectionBox);
+}
+function removeSelectionBox() {
+    if (selectionBox) { scene.remove(selectionBox); selectionBox = null; }
+}
+
+// --- State ---
+let pickup003 = null;          // the root group node for Pickup.003
+let pickupOrigPos = null;      // original position (Vector3)
+let pickupOrigRot = null;      // original rotation Y
+let placingMode = false;       // click-to-place active
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let allPickupMeshes = [];      // for raycasting car selection
+
+// --- UI elements ---
+const carPanel  = document.getElementById('carPanel');
+const inputX    = document.getElementById('inputX');
+const inputY    = document.getElementById('inputY');
+const inputZ    = document.getElementById('inputZ');
+const inputRot  = document.getElementById('inputRot');
+const btnApply  = document.getElementById('btnApply');
+const btnReset  = document.getElementById('btnResetCar');
+const placeMode = document.getElementById('placeMode');
+const badge     = document.getElementById('selectionBadge');
+
+function syncInputsFromCar() {
+    if (!pickup003) return;
+    inputX.value = pickup003.position.x.toFixed(2);
+    inputY.value = pickup003.position.y.toFixed(2);
+    inputZ.value = pickup003.position.z.toFixed(2);
+    inputRot.value = THREE.MathUtils.radToDeg(pickup003.rotation.y).toFixed(1);
+}
+
+function selectCar() {
+    carPanel.classList.add('visible');
+    badge.classList.add('show');
+    syncInputsFromCar();
+    createSelectionBox(pickup003);
+    placingMode = true;
+    placeMode.classList.add('active');
+    controls.enabled = false; // will toggle on canvas down/up
+}
+
+function deselectCar() {
+    placingMode = false;
+    placeMode.classList.remove('active');
+    badge.classList.remove('show');
+    removeSelectionBox();
+    controls.enabled = true;
+}
+
+// Apply button
+btnApply.addEventListener('click', () => {
+    if (!pickup003) return;
+    pickup003.position.set(
+        parseFloat(inputX.value) || 0,
+        parseFloat(inputY.value) || 0,
+        parseFloat(inputZ.value) || 0
+    );
+    pickup003.rotation.y = THREE.MathUtils.degToRad(parseFloat(inputRot.value) || 0);
+    createSelectionBox(pickup003);
+});
+
+// Reset to original
+btnReset.addEventListener('click', () => {
+    if (!pickup003 || !pickupOrigPos) return;
+    pickup003.position.copy(pickupOrigPos);
+    pickup003.rotation.y = pickupOrigRot;
+    syncInputsFromCar();
+    createSelectionBox(pickup003);
+});
+
+// --- Click handling ---
+let mouseDownPos = { x: 0, y: 0 };
+let isDrag = false;
+let pointerDownTime = 0;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+    mouseDownPos = { x: e.clientX, y: e.clientY };
+    isDrag = false;
+    pointerDownTime = Date.now();
+    if (!placingMode) controls.enabled = true;
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+    const dx = e.clientX - mouseDownPos.x;
+    const dy = e.clientY - mouseDownPos.y;
+    if (Math.sqrt(dx*dx + dy*dy) > 4) isDrag = true;
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+    if (isDrag) return; // was a drag, not a click
+    if (Date.now() - pointerDownTime > 400) return; // long press
+
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    if (placingMode) {
+        // Place car at clicked ground point
+        const hits = raycaster.intersectObject(groundPick);
+        if (hits.length > 0) {
+            pickup003.position.copy(hits[0].point);
+            pickup003.position.y = pickupOrigPos ? pickupOrigPos.y : 0;
+            syncInputsFromCar();
+            createSelectionBox(pickup003);
+        }
+        controls.enabled = true;
+        return;
+    }
+
+    // Try to select Pickup.003 by clicking its meshes
+    if (allPickupMeshes.length > 0) {
+        const hits = raycaster.intersectObjects(allPickupMeshes, true);
+        if (hits.length > 0) {
+            selectCar();
+        } else {
+            deselectCar();
+            carPanel.classList.remove('visible');
+        }
+    }
+});
+
+// Disable controls while in placing mode (so drag doesn't rotate)
+renderer.domElement.addEventListener('pointerdown', () => {
+    if (placingMode) controls.enabled = false;
+});
+renderer.domElement.addEventListener('pointerup', () => {
+    if (placingMode) controls.enabled = true;
+});
+
+// --- Load model ---
+const loader = new GLTFLoader();
+const loadingEl    = document.getElementById('loading');
+const loaderFill   = document.getElementById('loaderFill');
+const progressText = document.getElementById('progressText');
+const statsEl      = document.getElementById('stats');
+
+loader.load(
+    'low_poly_city.glb',
+    (gltf) => {
+        const model = gltf.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+
+        model.position.sub(center);
+        model.traverse((child) => {
+            if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+        });
+        scene.add(model);
+
+        // Find Pickup.003 root group
+        model.traverse((obj) => {
+            if (obj.name === 'Pickup.003') {
+                pickup003 = obj;
+                pickupOrigPos = obj.position.clone();
+                pickupOrigRot = obj.rotation.y;
+            }
+            // Collect all meshes inside Pickup.003 for raycasting
+            if (obj.name && obj.name.startsWith('Pickup.003') && obj.isMesh) {
+                allPickupMeshes.push(obj);
+            }
+        });
+
+        // Shadow camera
+        const halfExtent = maxDim * 1.5;
+        sun.shadow.camera.near = 0.5;
+        sun.shadow.camera.far = maxDim * 4;
+        sun.shadow.camera.left = -halfExtent; sun.shadow.camera.right = halfExtent;
+        sun.shadow.camera.top = halfExtent; sun.shadow.camera.bottom = -halfExtent;
+        sun.shadow.camera.updateProjectionMatrix();
+
+        // Grid & ground
+        const gridExtent = maxDim * 1.8;
+        const gridDivisions = Math.max(10, Math.round(gridExtent / 5));
+        ground.geometry.dispose();
+        ground.geometry = new THREE.PlaneGeometry(gridExtent * 2, gridExtent * 2);
+        grid.geometry.dispose();
+        grid.geometry = new THREE.GridHelper(gridExtent * 2, gridDivisions).geometry;
+        groundPick.geometry.dispose();
+        groundPick.geometry = new THREE.PlaneGeometry(gridExtent * 4, gridExtent * 4);
+
+        // Camera
+        camera.position.set(0, maxDim * 1.3, 0.01);
+        controls.update();
+
+        // Stats
+        let totalVerts = 0, meshCount = 0;
+        model.traverse((child) => {
+            if (child.isMesh) {
+                meshCount++;
+                if (child.geometry.attributes.position) totalVerts += child.geometry.attributes.position.count;
+            }
+        });
+        statsEl.textContent = `${meshCount} meshes · ${totalVerts.toLocaleString()} vertices`;
+        if (pickup003) statsEl.textContent += ' · Pickup.003 ready';
+
+        loadingEl.classList.add('hidden');
+        document.getElementById('resetView').classList.add('show');
+    },
+    (xhr) => {
+        const pct = Math.round((xhr.loaded / xhr.total) * 100);
+        loaderFill.style.width = pct + '%';
+        progressText.textContent = pct + '%';
+    },
+    (err) => {
+        console.error('Model load error:', err);
+        progressText.textContent = '⚠️ Failed to load model';
+    }
+);
+
+document.getElementById('resetView').addEventListener('click', () => {
+    camera.position.set(0, 80, 0.01);
+    controls.target.set(0, 0, 0);
+    controls.update();
+});
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    if (selectionBox && pickup003) selectionBox.position.copy(pickup003.position);
+    renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

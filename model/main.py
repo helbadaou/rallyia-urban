@@ -44,7 +44,7 @@ MIN_COLLISION_DISTANCE = 50
 COLLISION_THRESHOLD = 120
 
 try:
-    import config
+    import model.config as config
     SENDER_EMAIL = getattr(config, 'SENDER_EMAIL')
     RECEIVER_EMAIL = getattr(config, 'RECEIVER_EMAIL')
     PASSWORD = getattr(config, 'EMAIL_PASSWORD')
