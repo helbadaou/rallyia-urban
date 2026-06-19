@@ -137,6 +137,33 @@
         }
         #placeMode.active { opacity: 1; }
 
+        /* Traffic control button */
+        #trafficBtn {
+            position: fixed; bottom: 24px; left: 24px; z-index: 20;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            color: #fff; border: none; border-radius: 10px;
+            padding: 10px 20px; font-size: 0.82rem; font-family: inherit;
+            font-weight: 600; cursor: pointer; letter-spacing: 0.04em;
+            box-shadow: 0 4px 20px rgba(99,102,241,0.4);
+            transition: all 0.2s ease; display: flex; align-items: center; gap: 8px;
+        }
+        #trafficBtn:hover { opacity: 0.88; transform: translateY(-2px); box-shadow: 0 6px 24px rgba(99,102,241,0.55); }
+        #trafficBtn.running {
+            background: linear-gradient(135deg, #dc2626, #f97316);
+            box-shadow: 0 4px 20px rgba(220,38,38,0.4);
+        }
+        #trafficBtn.running:hover { box-shadow: 0 6px 24px rgba(220,38,38,0.55); }
+
+        #trafficStatus {
+            position: fixed; bottom: 70px; left: 24px; z-index: 20;
+            background: rgba(10,10,30,0.85); backdrop-filter: blur(10px);
+            border: 1px solid rgba(99,102,241,0.3); border-radius: 8px;
+            padding: 6px 14px; font-size: 0.72rem; color: rgba(168,139,250,0.9);
+            opacity: 0; transition: opacity 0.3s ease; pointer-events: none;
+            max-width: 280px; line-height: 1.5;
+        }
+        #trafficStatus.show { opacity: 1; }
+
         /* Selected car highlight tooltip */
         #selectionBadge {
             position: fixed; top: 70px; left: 24px; z-index: 20;
@@ -146,6 +173,27 @@
             opacity: 0; transition: opacity 0.2s ease; pointer-events: none;
         }
         #selectionBadge.show { opacity: 1; }
+
+        /* Car selector panel */
+        #carSelector {
+            position: fixed; bottom: 120px; left: 24px; z-index: 20;
+            background: rgba(10, 10, 30, 0.9); backdrop-filter: blur(12px);
+            border: 1px solid rgba(99,102,241,0.2); border-radius: 10px;
+            padding: 10px 14px; display: none; flex-direction: column; gap: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4); min-width: 200px;
+        }
+        #carSelector.visible { display: flex; }
+        #carSelector .sel-title {
+            font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.1em; color: rgba(255,255,255,0.4);
+        }
+        #carSelector select {
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; color: #e2e8f0; font-size: 0.78rem; font-family: inherit;
+            padding: 6px 8px; outline: none; cursor: pointer;
+        }
+        #carSelector select:focus { border-color: rgba(99,102,241,0.6); }
+        #carSelector select option { background: #1a1a2e; color: #e2e8f0; }
     </style>
 </head>
 <body>
@@ -169,7 +217,7 @@
 <!-- Car position panel -->
 <div id="carPanel">
     <div class="panel-title">Move Car</div>
-    <div class="car-name" id="panelCarName">Pickup.003</div>
+    <div class="car-name" id="panelCarName">-</div>
 
     <div class="field-row">
         <div class="field-label">Position</div>
@@ -204,9 +252,17 @@
     </div>
 </div>
 
-<div id="placeMode">📍 Click on the scene to place Pickup.003</div>
-<div id="selectionBadge" id="selectionBadge">✓ Pickup.003 selected</div>
+<div id="placeMode">📍 Click on the scene to place car</div>
+<div id="selectionBadge">✓ Car selected</div>
 
+<!-- Car selector -->
+<div id="carSelector">
+    <div class="sel-title">🚗 Select car to move</div>
+    <select id="carSelect"></select>
+</div>
+
+<button id="trafficBtn">▶ Start Traffic</button>
+<div id="trafficStatus"></div>
 <button id="resetView">↻ Reset View</button>
 <div id="stats"></div>
 
@@ -307,70 +363,96 @@ function removeSelectionBox() {
 }
 
 // --- State ---
-let pickup003 = null;          // the root group node for Pickup.003
-let pickupOrigPos = null;      // original position (Vector3)
-let pickupOrigRot = null;      // original rotation Y
-let placingMode = false;       // click-to-place active
+let selectedCar = null;
+let selectedCarOrigPos = null;
+let selectedCarOrigRot = null;
+let placingMode = false;
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
-let allPickupMeshes = [];      // for raycasting car selection
+let allCarMeshes = [];
+let allCars = [];
+
+// Road & traffic state
+let allRoadPaths = [];       // array of paths, each path is array of {x,z}
+let allRoadSurfaces = [];    // discovered road surface objects
+let trafficRunning = false;
+let trafficCars = [];        // { car, path, segLengths, totalLength, progress, speed, originalPos, originalRot }
 
 // --- UI elements ---
-const carPanel  = document.getElementById('carPanel');
-const inputX    = document.getElementById('inputX');
-const inputY    = document.getElementById('inputY');
-const inputZ    = document.getElementById('inputZ');
-const inputRot  = document.getElementById('inputRot');
-const btnApply  = document.getElementById('btnApply');
-const btnReset  = document.getElementById('btnResetCar');
-const placeMode = document.getElementById('placeMode');
-const badge     = document.getElementById('selectionBadge');
+const carPanel      = document.getElementById('carPanel');
+const inputX        = document.getElementById('inputX');
+const inputY        = document.getElementById('inputY');
+const inputZ        = document.getElementById('inputZ');
+const inputRot      = document.getElementById('inputRot');
+const btnApply      = document.getElementById('btnApply');
+const btnReset      = document.getElementById('btnResetCar');
+const placeModeEl   = document.getElementById('placeMode');
+const badge         = document.getElementById('selectionBadge');
+const trafficBtn    = document.getElementById('trafficBtn');
+const trafficStatus = document.getElementById('trafficStatus');
+const carSelector   = document.getElementById('carSelector');
+const carSelect     = document.getElementById('carSelect');
 
 function syncInputsFromCar() {
-    if (!pickup003) return;
-    inputX.value = pickup003.position.x.toFixed(2);
-    inputY.value = pickup003.position.y.toFixed(2);
-    inputZ.value = pickup003.position.z.toFixed(2);
-    inputRot.value = THREE.MathUtils.radToDeg(pickup003.rotation.y).toFixed(1);
+    if (!selectedCar) return;
+    inputX.value = selectedCar.position.x.toFixed(2);
+    inputY.value = selectedCar.position.y.toFixed(2);
+    inputZ.value = selectedCar.position.z.toFixed(2);
+    inputRot.value = THREE.MathUtils.radToDeg(selectedCar.rotation.y).toFixed(1);
 }
 
-function selectCar() {
+function selectCar(car) {
+    selectedCar = car;
+    selectedCarOrigPos = car.position.clone();
+    selectedCarOrigRot = car.rotation.y;
     carPanel.classList.add('visible');
+    document.getElementById('panelCarName').textContent = car.name;
+    badge.textContent = `✓ ${car.name} selected`;
     badge.classList.add('show');
     syncInputsFromCar();
-    createSelectionBox(pickup003);
+    createSelectionBox(car);
+    carSelect.value = car.name;
     placingMode = true;
-    placeMode.classList.add('active');
-    controls.enabled = false; // will toggle on canvas down/up
+    placeModeEl.classList.add('active');
 }
 
 function deselectCar() {
+    selectedCar = null;
     placingMode = false;
-    placeMode.classList.remove('active');
+    placeModeEl.classList.remove('active');
     badge.classList.remove('show');
     removeSelectionBox();
+    carPanel.classList.remove('visible');
     controls.enabled = true;
 }
 
 // Apply button
 btnApply.addEventListener('click', () => {
-    if (!pickup003) return;
-    pickup003.position.set(
+    if (!selectedCar) return;
+    selectedCar.position.set(
         parseFloat(inputX.value) || 0,
         parseFloat(inputY.value) || 0,
         parseFloat(inputZ.value) || 0
     );
-    pickup003.rotation.y = THREE.MathUtils.degToRad(parseFloat(inputRot.value) || 0);
-    createSelectionBox(pickup003);
+    selectedCar.rotation.y = THREE.MathUtils.degToRad(parseFloat(inputRot.value) || 0);
+    createSelectionBox(selectedCar);
 });
 
 // Reset to original
 btnReset.addEventListener('click', () => {
-    if (!pickup003 || !pickupOrigPos) return;
-    pickup003.position.copy(pickupOrigPos);
-    pickup003.rotation.y = pickupOrigRot;
+    if (!selectedCar || !selectedCarOrigPos) return;
+    selectedCar.position.copy(selectedCarOrigPos);
+    selectedCar.rotation.y = selectedCarOrigRot;
     syncInputsFromCar();
-    createSelectionBox(pickup003);
+    createSelectionBox(selectedCar);
+});
+
+// Car selector change
+carSelect.addEventListener('change', () => {
+    if (trafficRunning) return;
+    const name = carSelect.value;
+    const car = allCars.find(c => c.name === name);
+    if (car) selectCar(car);
 });
 
 // --- Click handling ---
@@ -382,7 +464,6 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     mouseDownPos = { x: e.clientX, y: e.clientY };
     isDrag = false;
     pointerDownTime = Date.now();
-    if (!placingMode) controls.enabled = true;
 });
 
 renderer.domElement.addEventListener('pointermove', (e) => {
@@ -392,39 +473,42 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 });
 
 renderer.domElement.addEventListener('pointerup', (e) => {
-    if (isDrag) return; // was a drag, not a click
-    if (Date.now() - pointerDownTime > 400) return; // long press
+    if (isDrag) return;
+    if (Date.now() - pointerDownTime > 400) return;
+    if (trafficRunning) return; // don't interact during traffic
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
 
-    if (placingMode) {
-        // Place car at clicked ground point
+    if (placingMode && selectedCar) {
         const hits = raycaster.intersectObject(groundPick);
         if (hits.length > 0) {
-            pickup003.position.copy(hits[0].point);
-            pickup003.position.y = pickupOrigPos ? pickupOrigPos.y : 0;
+            selectedCar.position.copy(hits[0].point);
+            selectedCar.position.y = selectedCarOrigPos ? selectedCarOrigPos.y : 0;
             syncInputsFromCar();
-            createSelectionBox(pickup003);
+            createSelectionBox(selectedCar);
         }
         controls.enabled = true;
         return;
     }
 
-    // Try to select Pickup.003 by clicking its meshes
-    if (allPickupMeshes.length > 0) {
-        const hits = raycaster.intersectObjects(allPickupMeshes, true);
+    if (allCarMeshes.length > 0) {
+        const hits = raycaster.intersectObjects(allCarMeshes, true);
         if (hits.length > 0) {
-            selectCar();
+            let obj = hits[0].object;
+            while (obj && !obj.userData.isCar) obj = obj.parent;
+            if (obj && obj.userData.isCar) {
+                deselectCar();
+                selectCar(obj);
+            }
         } else {
             deselectCar();
-            carPanel.classList.remove('visible');
         }
     }
 });
 
-// Disable controls while in placing mode (so drag doesn't rotate)
+// Disable controls while in placing mode
 renderer.domElement.addEventListener('pointerdown', () => {
     if (placingMode) controls.enabled = false;
 });
@@ -432,12 +516,442 @@ renderer.domElement.addEventListener('pointerup', () => {
     if (placingMode) controls.enabled = true;
 });
 
-// --- Load model ---
+// ============================================================
+// ---- ROAD DISCOVERY & PATH BUILDING ----
+// ============================================================
+
+const ROAD_KEYWORDS = ['road', 'strada', 'street', 'via ', 'paviment', 'asphalt', 'sidewalk',
+    'parking', 'corsia', 'crosswalk', 'crossing', 'lane', 'highway', 'avenue', 'boulevard',
+    'tarmac', 'pavé', 'carreggiata'];
+
+// Building keywords — surfaces under these are NOT roads
+const BUILDING_KEYWORDS = ['building', 'casa', 'palazzo', 'edificio', 'house', 'tower',
+    'block', 'apartment', 'office', 'shop', 'store', 'market', 'church', 'temple',
+    'mosque', 'school', 'hospital', 'cinema', 'stadium'];
+
+/**
+ * Collect all tall (building-height) bounding boxes in the model for exclusion.
+ */
+function collectBuildingBoxes(model, carUUIDs) {
+    const buildings = [];
+    model.traverse((obj) => {
+        if (!obj.isMesh || !obj.geometry) return;
+        if (carUUIDs.has(obj.uuid)) return;
+        const bbox = new THREE.Box3().setFromObject(obj);
+        const size = bbox.getSize(new THREE.Vector3());
+        const center = bbox.getCenter(new THREE.Vector3());
+        // Buildings are tall relative to ground
+        if (size.y > 4.0 && size.x * size.z > 4) {
+            const nameLower = (obj.name || '').toLowerCase();
+            const isBuilding = BUILDING_KEYWORDS.some(kw => nameLower.includes(kw))
+                || size.y > 8; // very tall objects are almost certainly buildings
+            if (isBuilding) {
+                buildings.push({ bbox, center, size });
+            }
+        }
+    });
+    return buildings;
+}
+
+/**
+ * Check if a flat surface lies underneath (overlaps horizontally with) a tall building.
+ */
+function isUnderBuilding(surface, buildings, tolerance) {
+    if (tolerance === undefined) tolerance = 4;
+    for (const b of buildings) {
+        // Horizontal overlap check
+        const overlapX = Math.abs(surface.center.x - b.center.x) < (surface.size.x + b.size.x) / 2 - tolerance;
+        const overlapZ = Math.abs(surface.center.z - b.center.z) < (surface.size.z + b.size.z) / 2 - tolerance;
+        if (overlapX && overlapZ) return true;
+    }
+    return false;
+}
+
+/**
+ * Discover flat ground-level surfaces in the model that could be roads.
+ * Surfaces with road-related names are prioritized. Surfaces under buildings are excluded.
+ */
+function discoverRoadSurfaces(model, carUUIDs) {
+    const surfaces = [];
+    const buildings = collectBuildingBoxes(model, carUUIDs);
+    console.log(`Found ${buildings.length} building volumes for exclusion`);
+
+    model.traverse((obj) => {
+        if (!obj.isMesh || !obj.geometry) return;
+        if (carUUIDs.has(obj.uuid)) return;
+
+        const bbox = new THREE.Box3().setFromObject(obj);
+        const size = bbox.getSize(new THREE.Vector3());
+        const center = bbox.getCenter(new THREE.Vector3());
+
+        // Must be flat (thin) and at ground level
+        if (size.y > 3.0) return;
+        if (Math.abs(center.y) > 5.0) return;
+
+        // Must have meaningful horizontal area
+        const area = size.x * size.z;
+        if (area < 6) return;
+
+        // Skip extremely large objects (the entire ground plane, sky, etc.)
+        if (size.x > 300 || size.z > 300) return;
+
+        // Check if name matches road keywords
+        const nameLower = (obj.name || '').toLowerCase();
+        const hasRoadName = ROAD_KEYWORDS.some(kw => nameLower.includes(kw));
+
+        // Exclude surfaces that sit directly under a building (likely building floors)
+        if (!hasRoadName && isUnderBuilding({ center, size }, buildings)) return;
+
+        surfaces.push({
+            name: obj.name || 'unnamed',
+            center: center.clone(),
+            size: size.clone(),
+            bbox: bbox.clone(),
+            area: area,
+            hasRoadName: hasRoadName
+        });
+    });
+
+    // Prioritize: named road surfaces first, then geometry-detected ones
+    surfaces.sort((a, b) => (b.hasRoadName ? 1 : 0) - (a.hasRoadName ? 1 : 0));
+    console.log(`${surfaces.filter(s => s.hasRoadName).length} name-matched, ${surfaces.filter(s => !s.hasRoadName).length} geometry-matched road surfaces`);
+
+    return surfaces;
+}
+
+/**
+ * Check if two road surfaces are adjacent/overlapping.
+ * Uses a small threshold so only truly connected surfaces are grouped.
+ */
+function surfacesAdjacent(a, b, threshold) {
+    if (threshold === undefined) threshold = 3;
+    return (
+        Math.abs(a.center.x - b.center.x) < (a.size.x + b.size.x) / 2 + threshold &&
+        Math.abs(a.center.z - b.center.z) < (a.size.z + b.size.z) / 2 + threshold
+    );
+}
+
+/**
+ * Sort road segments into a continuous path using nearest-neighbor.
+ * Uses bbox edge points (not centers) for proper start/end positions.
+ */
+function sortSegmentsToPath(segments) {
+    if (segments.length === 0) return [];
+    if (segments.length === 1) {
+        const s = segments[0];
+        // Create a longer path along the full bbox of the segment
+        if (s.size.x >= s.size.z) {
+            return [
+                { x: s.bbox.min.x, z: s.center.z },
+                { x: s.bbox.max.x, z: s.center.z }
+            ];
+        } else {
+            return [
+                { x: s.center.x, z: s.bbox.min.z },
+                { x: s.center.x, z: s.bbox.max.z }
+            ];
+        }
+    }
+
+    // Nearest-neighbor sort to form continuous path
+    const sorted = [segments[0]];
+    const remaining = segments.slice(1);
+
+    while (remaining.length > 0) {
+        const last = sorted[sorted.length - 1];
+        let bestIdx = 0, bestDist = Infinity;
+        for (let i = 0; i < remaining.length; i++) {
+            const dx = last.center.x - remaining[i].center.x;
+            const dz = last.center.z - remaining[i].center.z;
+            const d = dx * dx + dz * dz;
+            if (d < bestDist) { bestDist = d; bestIdx = i; }
+        }
+        sorted.push(remaining.splice(bestIdx, 1)[0]);
+    }
+
+    // Use bbox edge points for start/end of first/last segments, centers for middle
+    const path = [];
+    for (let i = 0; i < sorted.length; i++) {
+        const s = sorted[i];
+        if (i === 0) {
+            // Start from the edge furthest from the next segment
+            const next = sorted[1];
+            if (Math.abs(s.center.x - next.center.x) > Math.abs(s.center.z - next.center.z)) {
+                // Moving primarily in X - start from the X edge
+                const startX = s.center.x > next.center.x ? s.bbox.max.x : s.bbox.min.x;
+                path.push({ x: startX, z: s.center.z });
+            } else {
+                const startZ = s.center.z > next.center.z ? s.bbox.max.z : s.bbox.min.z;
+                path.push({ x: s.center.x, z: startZ });
+            }
+        } else if (i === sorted.length - 1) {
+            // End at the edge furthest from the previous segment
+            const prev = sorted[i - 1];
+            if (Math.abs(s.center.x - prev.center.x) > Math.abs(s.center.z - prev.center.z)) {
+                const endX = s.center.x > prev.center.x ? s.bbox.max.x : s.bbox.min.x;
+                path.push({ x: endX, z: s.center.z });
+            } else {
+                const endZ = s.center.z > prev.center.z ? s.bbox.max.z : s.bbox.min.z;
+                path.push({ x: s.center.x, z: endZ });
+            }
+        } else {
+            path.push({ x: s.center.x, z: s.center.z });
+        }
+    }
+    return path;
+}
+
+/**
+ * Build connected road paths from discovered surfaces.
+ * Groups adjacent surfaces and sorts them into linear routes.
+ */
+function buildRoadPaths(surfaces) {
+    if (surfaces.length === 0) return [];
+
+    const n = surfaces.length;
+    const adj = Array.from({ length: n }, () => new Set());
+
+    // Build adjacency graph
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            if (surfacesAdjacent(surfaces[i], surfaces[j])) {
+                adj[i].add(j);
+                adj[j].add(i);
+            }
+        }
+    }
+
+    // Find connected components via BFS
+    const visited = new Set();
+    const paths = [];
+
+    for (let i = 0; i < n; i++) {
+        if (visited.has(i)) continue;
+
+        const component = [];
+        const queue = [i];
+        visited.add(i);
+
+        while (queue.length > 0) {
+            const node = queue.shift();
+            component.push(node);
+            for (const neighbor of adj[node]) {
+                if (!visited.has(neighbor)) {
+                    visited.add(neighbor);
+                    queue.push(neighbor);
+                }
+            }
+        }
+
+        const segs = component.map(idx => surfaces[idx]);
+        const path = sortSegmentsToPath(segs);
+        if (path.length >= 2) {
+            paths.push(path);
+        }
+    }
+
+    // Filter out paths that are too short (cars would just spin in place)
+    const MIN_PATH_LENGTH = 10;
+    const longPaths = paths.filter(p => {
+        const { total } = computeSegLengths(p);
+        return total >= MIN_PATH_LENGTH;
+    });
+
+    console.log(`Built ${longPaths.length} paths (${paths.length} total, ${paths.length - longPaths.length} too short)`);
+
+    return longPaths;
+}
+
+/**
+ * Fallback: create grid-based paths across the model's bounding box.
+ */
+function createGridPaths(modelBBox, spacing) {
+    if (spacing === undefined) spacing = 18;
+    const paths = [];
+    const pad = spacing * 0.8;
+    const minX = modelBBox.min.x + pad;
+    const maxX = modelBBox.max.x - pad;
+    const minZ = modelBBox.min.z + pad;
+    const maxZ = modelBBox.max.z - pad;
+
+    if (maxX <= minX || maxZ <= minZ) return paths;
+
+    // Horizontal paths (along X axis)
+    for (let z = minZ; z <= maxZ; z += spacing) {
+        paths.push([
+            { x: minX, z: z },
+            { x: maxX, z: z }
+        ]);
+    }
+    // Vertical paths (along Z axis)
+    for (let x = minX; x <= maxX; x += spacing) {
+        paths.push([
+            { x: x, z: minZ },
+            { x: x, z: maxZ }
+        ]);
+    }
+
+    return paths;
+}
+
+// ============================================================
+// ---- PATH SAMPLING UTILITIES ----
+// ============================================================
+
+function computeSegLengths(path) {
+    const segs = [];
+    let total = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+        const dx = path[i + 1].x - path[i].x;
+        const dz = path[i + 1].z - path[i].z;
+        const d = Math.sqrt(dx * dx + dz * dz);
+        segs.push(d);
+        total += d;
+    }
+    return { segs, total };
+}
+
+function samplePath(path, segs, total, t) {
+    if (total <= 0) return { x: path[0].x, z: path[0].z, dx: 0, dz: 0 };
+    const target = t * total;
+    let acc = 0;
+    for (let i = 0; i < segs.length; i++) {
+        if (acc + segs[i] >= target || i === segs.length - 1) {
+            const localT = segs[i] > 0 ? (target - acc) / segs[i] : 0;
+            const p0 = path[i], p1 = path[i + 1];
+            return {
+                x: p0.x + (p1.x - p0.x) * localT,
+                z: p0.z + (p1.z - p0.z) * localT,
+                dx: p1.x - p0.x,
+                dz: p1.z - p0.z
+            };
+        }
+        acc += segs[i];
+    }
+    const last = path[path.length - 1];
+    return { x: last.x, z: last.z, dx: 0, dz: 0 };
+}
+
+// ============================================================
+// ---- TRAFFIC CONTROL ----
+// ============================================================
+
+function startTraffic() {
+    if (trafficRunning) return;
+
+    if (allRoadPaths.length === 0) {
+        trafficStatus.textContent = '⚠️ No road paths found. Try a different model.';
+        trafficStatus.classList.add('show');
+        setTimeout(() => trafficStatus.classList.remove('show'), 3000);
+        return;
+    }
+
+    trafficRunning = true;
+    trafficCars = [];
+
+    // Assign each car to a road path (distribute evenly, with random offset)
+    allCars.forEach((car, i) => {
+        const pathIdx = i % allRoadPaths.length;
+        const path = allRoadPaths[pathIdx];
+        const { segs, total } = computeSegLengths(path);
+
+        if (total <= 0) return;
+
+        // Random speed for variety: 0.0004 to 0.0012 per frame
+        const speed = 0.0004 + Math.random() * 0.0008;
+        // Stagger starting positions so cars don't all start at the same spot
+        const startProgress = (i * 0.13 + Math.random() * 0.1) % 1;
+
+        trafficCars.push({
+            car: car,
+            path: path,
+            segLengths: segs,
+            totalLength: total,
+            progress: startProgress,
+            speed: speed,
+            originalPos: car.position.clone(),
+            originalRot: car.rotation.y
+        });
+
+        // Snap car to its starting position on the road
+        const pt = samplePath(path, segs, total, startProgress);
+        car.position.x = pt.x;
+        car.position.z = pt.z;
+        if (Math.abs(pt.dx) + Math.abs(pt.dz) > 0.001) {
+            car.rotation.y = Math.atan2(pt.dx, pt.dz);
+        }
+    });
+
+    // Update UI
+    trafficBtn.textContent = '■ Stop Traffic';
+    trafficBtn.classList.add('running');
+    trafficStatus.textContent = `🚗 ${trafficCars.length} cars driving on ${allRoadPaths.length} road${allRoadPaths.length > 1 ? 's' : ''}…`;
+    trafficStatus.classList.add('show');
+
+    // Hide manual controls during traffic
+    carPanel.classList.remove('visible');
+    badge.classList.remove('show');
+    removeSelectionBox();
+    carSelector.classList.remove('visible');
+    deselectCar();
+}
+
+function stopTraffic() {
+    if (!trafficRunning) return;
+    trafficRunning = false;
+
+    // Restore all cars to their original positions
+    for (const state of trafficCars) {
+        state.car.position.copy(state.originalPos);
+        state.car.rotation.y = state.originalRot;
+    }
+
+    trafficCars = [];
+    trafficBtn.textContent = '▶ Start Traffic';
+    trafficBtn.classList.remove('running');
+    trafficStatus.classList.remove('show');
+
+    // Re-show car selector
+    if (allCars.length > 0) {
+        carSelector.classList.add('visible');
+    }
+}
+
+function updateTraffic() {
+    if (!trafficRunning) return;
+
+    for (const state of trafficCars) {
+        state.progress += state.speed;
+        // Loop continuously
+        if (state.progress >= 1) state.progress -= 1;
+
+        const pt = samplePath(state.path, state.segLengths, state.totalLength, state.progress);
+        state.car.position.x = pt.x;
+        state.car.position.z = pt.z;
+
+        // Face direction of travel
+        if (Math.abs(pt.dx) + Math.abs(pt.dz) > 0.001) {
+            state.car.rotation.y = Math.atan2(pt.dx, pt.dz);
+        }
+    }
+}
+
+trafficBtn.addEventListener('click', () => {
+    if (trafficRunning) stopTraffic();
+    else startTraffic();
+});
+
+// ============================================================
+// ---- MODEL LOAD ----
+// ============================================================
+
 const loader = new GLTFLoader();
 const loadingEl    = document.getElementById('loading');
 const loaderFill   = document.getElementById('loaderFill');
 const progressText = document.getElementById('progressText');
 const statsEl      = document.getElementById('stats');
+
+const CAR_KEYWORDS = ['car', 'pickup', 'police car', 'taxi', 'truck', 'van', 'bus'];
 
 loader.load(
     'low_poly_city.glb',
@@ -454,18 +968,82 @@ loader.load(
         });
         scene.add(model);
 
-        // Find Pickup.003 root group
+        // ---- Discover all car groups ----
+        const carGroups = new Map();
+
         model.traverse((obj) => {
-            if (obj.name === 'Pickup.003') {
-                pickup003 = obj;
-                pickupOrigPos = obj.position.clone();
-                pickupOrigRot = obj.rotation.y;
-            }
-            // Collect all meshes inside Pickup.003 for raycasting
-            if (obj.name && obj.name.startsWith('Pickup.003') && obj.isMesh) {
-                allPickupMeshes.push(obj);
+            if (!obj.name) return;
+            const lower = obj.name.toLowerCase();
+            if (obj.name.includes('_Colore') || obj.name.includes('_texture') ||
+                obj.name.includes('_Vetro') || obj.name.includes('_Segnali')) return;
+
+            for (const kw of CAR_KEYWORDS) {
+                if (lower === kw || lower.startsWith(kw)) {
+                    let hasMeshChild = false;
+                    obj.traverse(c => { if (c.isMesh) hasMeshChild = true; });
+                    if (hasMeshChild && !carGroups.has(obj.name)) {
+                        carGroups.set(obj.name, obj);
+                    }
+                    break;
+                }
             }
         });
+
+        allCars = Array.from(carGroups.values());
+        const carUUIDs = new Set();
+        allCars.forEach(car => {
+            car.userData.isCar = true;
+            car.traverse(c => {
+                if (c.isMesh) {
+                    allCarMeshes.push(c);
+                    carUUIDs.add(c.uuid);
+                }
+            });
+        });
+
+        console.log(`Found ${allCars.length} cars:`, allCars.map(c => c.name));
+
+        // Populate car selector dropdown
+        allCars.forEach(car => {
+            const opt = document.createElement('option');
+            opt.value = car.name;
+            opt.textContent = car.name;
+            carSelect.appendChild(opt);
+        });
+
+        if (allCars.length > 0) {
+            selectCar(allCars[0]);
+        }
+
+        // ---- Discover road surfaces ----
+        allRoadSurfaces = discoverRoadSurfaces(model, carUUIDs);
+        console.log(`Found ${allRoadSurfaces.length} road surfaces:`,
+            allRoadSurfaces.map(s => `${s.name} (${s.size.x.toFixed(1)}x${s.size.z.toFixed(1)})`));
+
+        // Build connected road paths from road surfaces
+        allRoadPaths = buildRoadPaths(allRoadSurfaces);
+        console.log(`Road-detected paths: ${allRoadPaths.length}`);
+        allRoadPaths.forEach((p, i) => {
+            const { total } = computeSegLengths(p);
+            console.log(`  Path ${i}: ${p.length} waypoints, length=${total.toFixed(1)}`);
+        });
+
+        // Always add grid-based paths for additional coverage
+        const modelBBox = new THREE.Box3().setFromObject(model);
+        const gridPaths = createGridPaths(modelBBox, 18);
+        // Merge: road paths first, then grid paths that don't overlap too much
+        allRoadPaths = allRoadPaths.concat(gridPaths);
+        console.log(`Total paths after grid merge: ${allRoadPaths.length}`);
+
+        console.log(`Total road paths: ${allRoadPaths.length}`);
+
+        // Update traffic button text
+        if (allCars.length > 0 && allRoadPaths.length > 0) {
+            trafficBtn.textContent = `▶ Start Traffic (${allCars.length} cars)`;
+        } else if (allCars.length === 0) {
+            trafficBtn.textContent = '▶ No Cars Found';
+            trafficBtn.disabled = true;
+        }
 
         // Shadow camera
         const halfExtent = maxDim * 1.5;
@@ -497,11 +1075,15 @@ loader.load(
                 if (child.geometry.attributes.position) totalVerts += child.geometry.attributes.position.count;
             }
         });
-        statsEl.textContent = `${meshCount} meshes · ${totalVerts.toLocaleString()} vertices`;
-        if (pickup003) statsEl.textContent += ' · Pickup.003 ready';
+        statsEl.textContent = `${meshCount} meshes · ${totalVerts.toLocaleString()} vertices · ${allCars.length} cars · ${allRoadPaths.length} roads`;
 
         loadingEl.classList.add('hidden');
         document.getElementById('resetView').classList.add('show');
+
+        // Show car selector
+        if (allCars.length > 0) {
+            carSelector.classList.add('visible');
+        }
     },
     (xhr) => {
         const pct = Math.round((xhr.loaded / xhr.total) * 100);
@@ -526,10 +1108,18 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// ============================================================
+// ---- RENDER LOOP ----
+// ============================================================
+
 function animate() {
     requestAnimationFrame(animate);
     controls.update();
-    if (selectionBox && pickup003) selectionBox.position.copy(pickup003.position);
+    if (selectionBox && selectedCar) selectionBox.position.copy(selectedCar.position);
+
+    // Update all car traffic animation
+    updateTraffic();
+
     renderer.render(scene, camera);
 }
 animate();
